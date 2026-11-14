@@ -1,0 +1,203 @@
+---
+title: "Time Series Linear Model"
+author: "Vince Garcia"
+format:
+    html:
+        toc: true
+    pdf:
+        geometry: "top=1in, bottom=1in, left=0.75in"
+        include-in-header:
+            text: |
+                % keep gt tables in the document flow, directly under their code
+                \usepackage{float}
+                \floatplacement{table}{H}
+                % keep each code block on one page (unbreakable minipage)
+                \usepackage{etoolbox}
+                \BeforeBeginEnvironment{Shaded}{\begin{minipage}{\linewidth}}
+                \AfterEndEnvironment{Shaded}{\end{minipage}}
+---
+
+##IMPORTS
+```{r}
+#| message: false
+#| warning: false
+library(tidyverse)
+library(fpp3)
+library(slider) #for rolling window functions
+library(gt)
+library(readr)
+library(dplyr)
+
+```
+
+
+##Load the data
+```{r}
+data <- read_csv("~/USD/Applied Time Series/Final Project/residential_electricity.csv")
+```
+##Convert to tsibble
+```{r}
+
+electric <- data |>
+  transmute(Month = yearmonth(date), Value = residential_million_kwh) |>
+  as_tsibble(index = Month)
+```
+##Train test split
+```{r}
+TR <- electric |>
+  filter(Month <= yearmonth("2025 Jan"), Month >= yearmonth("2010 Jan"))
+
+test <- electric |>
+  filter(Month >= yearmonth("2025 Jan"), Month <= yearmonth("2026 July"))
+```
+#First glance
+```{r}
+electric|> autoplot()
+```
+#Transformed Data
+```{r}
+electric_log <- electric |>
+    mutate(
+        log_v = log(Value),
+        d1 = difference(log_v, lag = 1)
+    )
+```
+
+
+#Log Transformed Data
+```{r}
+electric_log |>
+    autoplot(log_v)
+```
+
+#Evaluating log-transformed, differenced training data
+```{r}
+electric_log |>
+    autoplot(d1)
+```
+#tranform training data
+```{r}
+train <- TR |>
+    mutate(
+        #log transform data
+        log_v = log(Value),
+#difference training data
+        d1 = difference(log_v, lag = 1)
+    )
+```
+
+#TSLM - auto
+```{r}
+TSLM_fit <- train |>
+  model(tslm = TSLM(d1 ~ trend() + season())) 
+
+report(TSLM_fit)
+```
+#TSLM - auto -unmodified
+```{r}
+#TSLM - auto -unmodified
+TSLM_fit_unmodified <- TR |>
+  model(tslm = TSLM(Value ~ trend() + season())) 
+
+report(TSLM_fit_unmodified)
+```
+
+#noise test
+```{r}
+TSLM_fit |>
+    augment() |>
+    autoplot(.innov)
+```
+#Residual plot
+```{r}
+TSLM_fit |>
+    gg_tsresiduals(type = "innovation")
+```
+#Ljung-Box test
+```{r}
+dof_tslmf <- nrow(tidy(TSLM_fit_unmodified))
+
+TSLM_fit_unmodified |>
+    augment() |>
+    features(.innov, list(ljung_box = ljung_box, box_pierce = box_pierce), lag = 12, dof = 6) |>
+    select(contains("pvalue") | contains("stat"))
+
+n <- nrow(TR)
+tibble(
+    model = c("TSLM", "TSLM Unmodified"),
+    coefficients = c(nrow(tidy(TSLM_fit)), nrow(tidy(TSLM_fit_unmodified))),
+    residual_df = n - coefficients
+)
+```
+#noise test
+```{r}
+TSLM_fit_unmodified |>
+    augment() |>
+    autoplot(.innov)
+```
+#Residual plot
+```{r}
+TSLM_fit_unmodified |>
+    gg_tsresiduals(type = "innovation")
+```
+#Ljung-Box test
+```{r}
+dof_tslm <- nrow(tidy(TSLM_fit))
+
+TSLM_fit |>
+    augment() |>
+    features(.innov, list(ljung_box = ljung_box, box_pierce = box_pierce), lag = 12, dof = dof_tslm) |>
+    select(contains("pvalue") | contains("stat"))
+```
+#Forecasting both TSLM on transformed data and original data
+```{r}
+bind_rows(
+    fc |>
+        filter(.model == "unmodified") |>
+        accuracy(test) |>
+        select(.model, RMSE, MAE, MAPE),
+    diff_pred |>
+        left_join(test |> select(Month, Value), by = "Month") |>
+        summarise(
+            RMSE = sqrt(mean((Value - .fitted)^2)),
+            MAE = mean(abs(Value - .fitted)),
+            MAPE = mean(abs(Value - .fitted) / Value) * 100,
+            .by = .model
+        )
+)
+```
+
+
+
+#Decomposition
+
+```{r}
+decomp_fit <- electric |>
+  model(stl = STL(Value))
+
+components(decomp_fit) |>
+  autoplot()
+```
+
+```{r}
+fc_unmod <- fc |>
+  filter(.model == "unmodified") |>
+  as_tibble() |>
+  select(Month, .model, .mean)
+
+curves <- bind_rows(fc_unmod, fc_diff |> select(Month, .model, .mean))
+
+actual <- electric |>
+  filter(Month >= yearmonth("2022 Jan")) |>
+  as_tibble()
+
+ggplot() +
+  geom_line(data = actual, aes(x = Month, y = Value), colour = "black") +
+  geom_line(data = curves, aes(x = Month, y = .mean, colour = .model), linewidth = 1.2) +
+  labs(
+    y = "Total Electricity Sales (Millions of Kilowatthours)",
+    title = "Forecasts vs. Actual",
+    subtitle = "Training: Jan 2010 to Jan 2025, holdout: Jan 2025 to Jul 2026"
+  )
+
+```
