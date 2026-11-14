@@ -1,0 +1,349 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "---\n",
+    "title: \"Time Series Linear Model\"\n",
+    "author: \"Vince Garcia\"\n",
+    "---\n",
+    "\n",
+    "## IMPORTS"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "#| message: false\n",
+    "#| warning: false\n",
+    "library(tidyverse)\n",
+    "library(fpp3)\n",
+    "library(slider) #for rolling window functions\n",
+    "library(gt)\n",
+    "library(readr)\n",
+    "library(dplyr)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Load the data"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "data <- read_csv(\"~/USD/Applied Time Series/Final Project/residential_electricity.csv\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Convert to tsibble"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "electric <- data |>\n",
+    "  transmute(Month = yearmonth(date), Value = residential_million_kwh) |>\n",
+    "  as_tsibble(index = Month)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Train test split"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "TR <- electric |>\n",
+    "  filter(Month <= yearmonth(\"2025 Jan\"), Month >= yearmonth(\"2010 Jan\"))\n",
+    "\n",
+    "test <- electric |>\n",
+    "  filter(Month >= yearmonth(\"2025 Jan\"), Month <= yearmonth(\"2026 July\"))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# First glance"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "electric|> autoplot()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Transformed Data"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "electric_log <- electric |>\n",
+    "    mutate(\n",
+    "        log_v = log(Value),\n",
+    "        d1 = difference(log_v, lag = 1)\n",
+    "    )"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Log Transformed Data"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "electric_log |>\n",
+    "    autoplot(log_v)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Evaluating log-transformed, differenced training data"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "electric_log |>\n",
+    "    autoplot(d1)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# tranform training data"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "train <- TR |>\n",
+    "    mutate(\n",
+    "        #log transform data\n",
+    "        log_v = log(Value),\n",
+    "#difference training data\n",
+    "        d1 = difference(log_v, lag = 1)\n",
+    "    )"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# TSLM - auto"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "TSLM_fit <- train |>\n",
+    "  model(tslm = TSLM(d1 ~ trend() + season())) \n",
+    "\n",
+    "report(TSLM_fit)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# TSLM - auto -unmodified"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "#TSLM - auto -unmodified\n",
+    "TSLM_fit_unmodified <- TR |>\n",
+    "  model(tslm = TSLM(Value ~ trend() + season())) \n",
+    "\n",
+    "report(TSLM_fit_unmodified)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# noise test"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "TSLM_fit |>\n",
+    "    augment() |>\n",
+    "    autoplot(.innov)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Residual plot"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "TSLM_fit |>\n",
+    "    gg_tsresiduals(type = \"innovation\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Ljung-Box test"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "dof_tslmf <- nrow(tidy(TSLM_fit_unmodified))\n",
+    "\n",
+    "TSLM_fit_unmodified |>\n",
+    "    augment() |>\n",
+    "    features(.innov, list(ljung_box = ljung_box, box_pierce = box_pierce), lag = 12, dof = 6) |>\n",
+    "    select(contains(\"pvalue\") | contains(\"stat\"))\n",
+    "\n",
+    "n <- nrow(TR)\n",
+    "tibble(\n",
+    "    model = c(\"TSLM\", \"TSLM Unmodified\"),\n",
+    "    coefficients = c(nrow(tidy(TSLM_fit)), nrow(tidy(TSLM_fit_unmodified))),\n",
+    "    residual_df = n - coefficients\n",
+    ")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# noise test"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "TSLM_fit_unmodified |>\n",
+    "    augment() |>\n",
+    "    autoplot(.innov)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Residual plot"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "TSLM_fit_unmodified |>\n",
+    "    gg_tsresiduals(type = \"innovation\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Ljung-Box test"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "dof_tslm <- nrow(tidy(TSLM_fit))\n",
+    "\n",
+    "TSLM_fit |>\n",
+    "    augment() |>\n",
+    "    features(.innov, list(ljung_box = ljung_box, box_pierce = box_pierce), lag = 12, dof = dof_tslm) |>\n",
+    "    select(contains(\"pvalue\") | contains(\"stat\"))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Forecasting both TSLM on transformed data and original data"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "bind_rows(\n",
+    "    fc |>\n",
